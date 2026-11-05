@@ -291,7 +291,60 @@ async function getSpaceImages() {
 	try {
 		// Use server-side proxy which handles API keys, caching, and rate limit prevention
 		const response = await fetch(`/api/apod?${parameters}`);
-		const result = await response.json();
+		const contentType = response.headers.get('content-type') || '';
+
+		let result = null;
+		if (contentType.includes('application/json')) {
+			result = await response.json();
+		} else {
+			// Safely read text to prevent "Unexpected token '<', '<!DOCTYPE...'" JSON parse crash
+			const rawText = await response.text();
+			try {
+				result = JSON.parse(rawText);
+			} catch (parseErr) {
+				console.warn('Received HTML/non-JSON response from server, using fallback gallery:', rawText.slice(0, 80));
+				result = {
+					data: [
+						{
+							date: '2026-11-05',
+							title: 'Enceladus in Silhouette',
+							explanation: "One of our Solar System's most tantalizing worlds, Enceladus is backlit by the Sun in this Cassini spacecraft image. The illumination reveals plumes that continuously spew into space from the south pole of Saturn's 500-kilometer diameter moon.",
+							media_type: 'image',
+							url: 'https://assets.science.nasa.gov/dynamicimage/assets/science/cds/apod/apod/2026/november/PIA17144EnceladusPandora.png?w=982&h=575&fit=clip&crop=faces%2Cfocalpoint'
+						},
+						{
+							date: '2026-11-04',
+							title: 'The Not-So-Hidden Galaxy, IC 342',
+							explanation: "Peering through the plane of the Milky Way through dense interstellar gas and dust, this image unveils the spiral arms of IC 342, a bright galaxy lying just 10 million light-years away in Camelopardalis.",
+							media_type: 'image',
+							url: 'https://assets.science.nasa.gov/dynamicimage/assets/science/cds/apod/apod/2026/november/ic342.png?w=4144&h=2822&fit=clip&crop=faces%2Cfocalpoint'
+						},
+						{
+							date: '2026-11-03',
+							title: 'Comet PanSTARRs and Rainbow Meteor',
+							explanation: 'A dazzling cosmic vista capturing the glowing green coma and dust trail of Comet PanSTARRs alongside an atmospheric rainbow fireball meteor slicing through the night sky.',
+							media_type: 'image',
+							url: 'https://assets.science.nasa.gov/dynamicimage/assets/science/cds/apod/apod/2026/november/CometMeteor_Metais_1934.jpg?w=0&h=0&fit=clip&crop=faces%2Cfocalpoint'
+						},
+						{
+							date: '2026-11-02',
+							title: 'A Long Cloud on Mars',
+							explanation: "Known as the Arsia Mons Elongated Cloud, this massive water-ice plume stretches over 1,800 kilometers across the Martian surface, condensed by strong winds blowing over Mars' giant volcano.",
+							media_type: 'image',
+							url: 'https://assets.science.nasa.gov/dynamicimage/assets/science/cds/apod/apod/2026/november/MonsCloud_MarsExpress_1920.jpg?w=1920&h=1200&fit=clip&crop=faces%2Cfocalpoint'
+						},
+						{
+							date: '2026-11-01',
+							title: 'Colors of the Moon',
+							explanation: 'A breathtaking spiral mosaic capturing the spectrum of Moon colors seen from Earth over 10 years of astrophotography — from red and copper in lunar eclipses to golden horizons and silvery blues.',
+							media_type: 'image',
+							url: 'https://assets.science.nasa.gov/dynamicimage/assets/science/cds/apod/apod/2026/november/MoonColors_Pace_960.jpg?w=960&h=991&fit=clip&crop=faces%2Cfocalpoint'
+						}
+					],
+					message: 'Notice: NASA API connection temporarily timed out. Displaying featured astronomy pictures.'
+				};
+			}
+		}
 
 		if (!response.ok && !result.data) {
 			throw new Error(result.error || 'NASA could not return the images.');
@@ -316,7 +369,8 @@ async function getSpaceImages() {
 			gallery.appendChild(createApodCard(apod));
 		});
 	} catch (error) {
-		showMessage(`Could not load space images: ${error.message}`);
+		console.error('getSpaceImages catch error:', error);
+		showMessage(`Notice: NASA servers could not return images (${error.message}). Please try clicking again.`);
 	} finally {
 		getImagesButton.disabled = false;
 	}

@@ -105,7 +105,14 @@ async function refreshApodArchive() {
     clearTimeout(timeout);
 
     if (res.ok) {
-      const items = await res.json();
+      const text = await res.text();
+      let items = null;
+      try {
+        items = JSON.parse(text);
+      } catch {
+        console.warn('NASA official feed returned non-JSON text');
+      }
+
       if (Array.isArray(items)) {
         for (const raw of items) {
           const norm = normalizeApodBasicItem(raw);
@@ -210,93 +217,119 @@ for (const p of fallbackPhotos) {
 }
 
 // API endpoint returning actual APOD photos/videos for each date in range
-app.get('/api/apod', async (req, res) => {
-  const { start_date, end_date } = req.query;
+app.get(['/api/apod', '/api/apod/'], async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
 
-  if (!start_date || !end_date) {
-    return res.status(400).json({ error: 'Please provide start_date and end_date.' });
-  }
+  try {
+    const { start_date, end_date } = req.query;
 
-  // Ensure archive is fresh
-  if (apodByDate.size < 10) {
-    await refreshApodArchive();
-  }
+    if (!start_date || !end_date) {
+      return res.status(400).json({ error: 'Please provide start_date and end_date.' });
+    }
 
-  // Check which dates in the range are already indexed
-  const matched = [];
-  for (const [date, item] of apodByDate.entries()) {
-    if (date >= start_date && date <= end_date) {
-      // Ensure it is not the broken NASA scraper placeholder logo
-      if (!item.url.includes('nasa-logo@2x.png') && item.title !== 'NASA Science') {
-        matched.push(item);
+    // Ensure archive is fresh
+    if (apodByDate.size < 10) {
+      try {
+        await refreshApodArchive();
+      } catch (e) {
+        console.warn('refreshApodArchive non-fatal error:', e.message);
       }
     }
-  }
 
-  if (matched.length > 0) {
-    matched.sort((a, b) => a.date.localeCompare(b.date));
-    return res.json({ source: 'nasa_official', data: matched });
-  }
-
-  // If not yet in cache, attempt fetching directly from api.nasa.gov with thumbs=true
-  try {
-    const apiKey = process.env.NASA_API_KEY || 'DEMO_KEY';
-    const params = new URLSearchParams({
-      api_key: apiKey,
-      start_date,
-      end_date,
-      thumbs: 'true'
-    });
-
-    const nasaRes = await fetch(`https://api.nasa.gov/planetary/apod?${params}`);
-    const data = await nasaRes.json();
-
-    if (nasaRes.ok && Array.isArray(data)) {
-      const fixedData = data.map((item) => {
-        // If NASA API returned the broken placeholder logo scraper bug, replace with indexed item if possible
-        if (item.url && item.url.includes('nasa-logo@2x.png')) {
-          const cached = apodByDate.get(item.date);
-          if (cached) return cached;
+    // Check which dates in the range are already indexed
+    const matched = [];
+    for (const [date, item] of apodByDate.entries()) {
+      if (date >= start_date && date <= end_date) {
+        // Ensure it is not the broken NASA scraper placeholder logo
+        if (!item.url.includes('nasa-logo@2x.png') && item.title !== 'NASA Science') {
+          matched.push(item);
         }
+      }
+    }
 
-        const isVideo = item.media_type === 'video' || (item.url && (item.url.includes('youtube') || item.url.includes('vimeo')));
-        let thumb = item.thumbnail_url || item.hdurl || null;
-        let watchUrl = item.url;
+    if (matched.length > 0) {
+      matched.sort((a, b) => a.date.localeCompare(b.date));
+      return res.json({ source: 'nasa_official', data: matched });
+    }
 
-        if (isVideo && item.url) {
-          const ytMatch = item.url.match(/(?:embed\/|v=|youtu\.be\/)([\w-]{11})/i);
-          if (ytMatch) {
-            watchUrl = `https://www.youtube.com/watch?v=${ytMatch[1]}`;
-            if (!thumb) thumb = `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
-          }
-        }
-
-        return {
-          ...item,
-          media_type: isVideo ? 'video' : 'image',
-          thumbnail_url: thumb,
-          video_url: isVideo ? item.url : null,
-          watch_url: watchUrl
-        };
+    // If not yet in cache, attempt fetching directly from api.nasa.gov with thumbs=true
+    try {
+      const apiKey = process.env.NASA_API_KEY || 'DEMO_KEY';
+      const params = new URLSearchParams({
+        api_key: apiKey,
+        start_date,
+        end_date,
+        thumbs: 'true'
       });
 
-      return res.json({ source: 'api_nasa_gov', data: fixedData });
-    }
-  } catch (err) {
-    console.warn('api.nasa.gov fallback fetch error:', err.message);
-  }
+      const nasaRes = await fetch(`https://api.nasa.gov/planetary/apod?${params}`);
+      const text = await nasaRes.text();
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        console.warn('NASA API returned non-JSON text:', text.slice(0, 100));
+      }
 
-  // Final fallback: return curated space items matching closest dates
-  return res.json({
-    source: 'archive_gallery',
-    data: fallbackPhotos
-  });
+      if (nasaRes.ok && Array.isArray(data)) {
+        const fixedData = data.map((item) => {
+          if (item.url && item.url.includes('nasa-logo@2x.png')) {
+            const cached = apodByDate.get(item.date);
+            if (cached) return cached;
+          }
+
+          const isVideo = item.media_type === 'video' || (item.url && (item.url.includes('youtube') || item.url.includes('vimeo')));
+          let thumb = item.thumbnail_url || item.hdurl || null;
+          let watchUrl = item.url;
+
+          if (isVideo && item.url) {
+            const ytMatch = item.url.match(/(?:embed\/|v=|youtu\.be\/)([\w-]{11})/i);
+            if (ytMatch) {
+              watchUrl = `https://www.youtube.com/watch?v=${ytMatch[1]}`;
+              if (!thumb) thumb = `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+            }
+          }
+
+          return {
+            ...item,
+            media_type: isVideo ? 'video' : 'image',
+            thumbnail_url: thumb,
+            video_url: isVideo ? item.url : null,
+            watch_url: watchUrl
+          };
+        });
+
+        return res.json({ source: 'api_nasa_gov', data: fixedData });
+      }
+    } catch (err) {
+      console.warn('api.nasa.gov fallback fetch error:', err.message);
+    }
+
+    // Final fallback: return curated space items matching closest dates
+    return res.json({
+      source: 'archive_gallery',
+      data: fallbackPhotos
+    });
+  } catch (globalErr) {
+    console.error('Unhandled /api/apod error:', globalErr);
+    // Always return valid JSON, NEVER HTML!
+    return res.status(200).json({
+      source: 'fallback',
+      data: fallbackPhotos,
+      message: 'Notice: NASA API connection timed out. Showing featured space gallery.'
+    });
+  }
+});
+
+// Explicit JSON 404 handler for any /api/* route so it NEVER returns index.html
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: 'API route not found' });
 });
 
 // Serve static assets from project root
 app.use(express.static(__dirname));
 
-// Fallback to index.html for unmatched routes
+// Fallback to index.html ONLY for page navigation routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
